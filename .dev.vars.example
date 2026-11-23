@@ -1,0 +1,3 @@
+# Master password for Relay: signs you in to the web UI and lets you mint API/agent tokens.
+# Generate with: openssl rand -hex 32
+ADMIN_TOKEN=change-me-to-a-long-random-string

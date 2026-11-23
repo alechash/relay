@@ -1,0 +1,31 @@
+{
+  "name": "relay",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Personal card/column tracker with a full REST API, MCP server, complete history and agent sign-off. Runs on Cloudflare Workers + D1.",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/*.test.mjs"
+  },
+  "cloudflare": {
+    "bindings": {
+      "ADMIN_TOKEN": {
+        "description": "Your master password for Relay. Used to sign in to the web UI and to create API/agent tokens. Generate one with `openssl rand -hex 32` and keep it somewhere safe."
+      },
+      "DB": {
+        "description": "D1 database holding boards, cards and the full change history. Created automatically."
+      }
+    }
+  },
+  "dependencies": {
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261123.1",
+    "typescript": "^5.9.3",
+    "wrangler": "^4.166.0"
+  }
+}

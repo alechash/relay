@@ -1,0 +1,24 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "relay",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-01",
+  "observability": { "enabled": true },
+  // The web UI is plain static files served from ./public.
+  // API, MCP and docs routes always hit the Worker first.
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/mcp", "/mcp/*", "/docs", "/healthz", "/openapi.json"]
+  },
+  // No database_id needed: Wrangler / the Deploy button provisions the D1
+  // database automatically on first deploy. The schema is applied by the
+  // Worker itself on first request (see src/db.ts), so there is no separate
+  // migration step.
+  "d1_databases": [{ "binding": "DB", "database_name": "relay" }],
+  "vars": {
+    // Display name used for changes you make while signed in with ADMIN_TOKEN.
+    "OWNER_NAME": "Owner"
+  }
+}
