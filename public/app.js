@@ -296,7 +296,7 @@ function shell(active, ...content) {
 
 function renderNotConfigured(message) {
   document.getElementById("app").replaceChildren(
-    h("div", { class: "login" }, h("div", { class: "panel", style: "max-width:520px" }, h("h2", {}, "Relay needs one more step"), h("p", {}, message), h("p", { class: "muted small" }, "In the Cloudflare dashboard: Workers & Pages → your Worker → Settings → Variables and Secrets → add a secret named ADMIN_TOKEN. Then reload this page."))),
+    h("div", { class: "login" }, h("div", { class: "panel", style: "max-width:520px" }, h("h2", {}, "Relay needs one more step"), h("p", {}, message), h("p", { class: "muted small" }, "In the Cloudflare dashboard: Workers & Pages → relay → Settings → Variables and Secrets → Add → type Secret, name ADMIN_TOKEN. Build variables don't reach the running Worker. Then reload this page."), h("button", { class: "btn", onclick: () => location.reload() }, "Reload"))),
   );
 }
 

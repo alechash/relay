@@ -17,6 +17,9 @@
   // Worker itself on first request (see src/db.ts), so there is no separate
   // migration step.
   "d1_databases": [{ "binding": "DB", "database_name": "relay" }],
+  // Keep variables added in the dashboard when this config is deployed
+  // (otherwise each deploy resets plain-text vars to the ones listed below).
+  "keep_vars": true,
   "vars": {
     // Display name used for changes you make while signed in with ADMIN_TOKEN.
     "OWNER_NAME": "Owner"

@@ -1,3 +1,4 @@
+import { adminTokenProblem } from "./auth";
 import { ensureSchema } from "./db";
 import type { Env } from "./env";
 import { renderDocs } from "./docs";
@@ -10,7 +11,10 @@ export default {
     const url = new URL(req.url);
     const p = url.pathname;
 
-    if (p === "/healthz") return json({ ok: true, configured: !!env.ADMIN_TOKEN });
+    if (p === "/healthz") {
+      const problem = adminTokenProblem(env);
+      return json({ ok: true, configured: problem === null, admin_token: problem ?? "ok", database: !!env.DB });
+    }
     if (p === "/docs") return new Response(renderDocs(url.origin), { headers: { "Content-Type": "text/html; charset=utf-8" } });
     if (p === "/openapi.json") return json(buildOpenApi(url.origin));
 

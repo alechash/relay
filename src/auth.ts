@@ -11,14 +11,33 @@ export function ownerActor(env: Env): Actor {
   return { id: "owner", name: env.OWNER_NAME || "Owner", kind: "owner", scope: "write", requiresReview: false };
 }
 
+export const MIN_ADMIN_TOKEN_LENGTH = 12;
+
+/** Why ADMIN_TOKEN is unusable, or null when it is fine. Surfaced by /healthz and the web UI. */
+export function adminTokenProblem(env: Env): "missing" | "too_short" | null {
+  const t = typeof env.ADMIN_TOKEN === "string" ? env.ADMIN_TOKEN.trim() : "";
+  if (!t) return "missing";
+  if (t.length < MIN_ADMIN_TOKEN_LENGTH) return "too_short";
+  return null;
+}
+
 function requireConfigured(env: Env): string {
-  if (!env.ADMIN_TOKEN || env.ADMIN_TOKEN.length < 12) {
+  const problem = adminTokenProblem(env);
+  if (problem === "missing") {
     throw new ApiError(
       "not_configured",
-      "Relay is not configured: set the ADMIN_TOKEN secret (at least 12 characters) on the Worker, e.g. `npx wrangler secret put ADMIN_TOKEN`.",
+      "The Worker can't see an ADMIN_TOKEN at runtime. Add it under Settings → Variables and Secrets (type: Secret), not under Build → Variables. Runtime secrets apply immediately, with no rebuild needed. From a terminal: `npx wrangler secret put ADMIN_TOKEN`.",
+      { problem },
     );
   }
-  return env.ADMIN_TOKEN;
+  if (problem === "too_short") {
+    throw new ApiError(
+      "not_configured",
+      `ADMIN_TOKEN is set but shorter than ${MIN_ADMIN_TOKEN_LENGTH} characters. Replace it with a longer random value (e.g. \`openssl rand -hex 32\`) under Settings → Variables and Secrets.`,
+      { problem },
+    );
+  }
+  return env.ADMIN_TOKEN!.trim();
 }
 
 const sessionKey = (adminToken: string) => `relay-session:${adminToken}`;
@@ -54,7 +73,7 @@ async function verifySession(env: Env, value: string): Promise<boolean> {
 
 export async function checkAdminToken(env: Env, candidate: string): Promise<boolean> {
   const admin = requireConfigured(env);
-  return safeEqual(candidate, admin);
+  return safeEqual(candidate.trim(), admin);
 }
 
 export interface AuthResult {
