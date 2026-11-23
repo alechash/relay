@@ -119,6 +119,15 @@ const MIGRATIONS: { id: number; name: string; statements: string[] }[] = [
       `CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id, seq)`,
     ],
   },
+  {
+    id: 2,
+    name: "settings",
+    statements: [
+      // Key/value settings. `admin_token_sha256` holds the hash of an admin token as an
+      // alternative to the ADMIN_TOKEN Worker secret (useful when only D1 access is available).
+      `CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+    ],
+  },
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1].id;

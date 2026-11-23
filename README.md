@@ -21,6 +21,17 @@ A personal card-and-column tracker for everything you do, built so that you, you
 
 There is no migration step. The Worker sets up its database schema on the first request.
 
+**Alternative to the secret:** Relay also accepts an admin token whose SHA-256 hash is stored in its own database. This is handy if you can reach D1 but not the Worker's secrets:
+
+```sh
+TOKEN=$(openssl rand -hex 32); echo "$TOKEN"   # keep this, it's your admin token
+HASH=$(printf %s "$TOKEN" | sha256sum | cut -d' ' -f1)
+npx wrangler d1 execute DB --remote --command \
+  "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('admin_token_sha256', '$HASH', datetime('now'))"
+```
+
+Either credential works, and `/healthz` reports which one is in use (`"admin_token": "env" | "database" | "missing"`). To rotate a database-stored token, run the same command with a new token. Note that if the secret isn't set, existing web sessions sign out on rotation.
+
 ### Manually
 
 ```sh

@@ -64,11 +64,11 @@ export async function handleApi(req: Request, env: Env, exec: ExecutionContext):
     // ---- session endpoints for the built-in web UI (not part of the operation registry)
     if (path === "/auth/login" && req.method === "POST") {
       const body = (await req.json().catch(() => ({}))) as { token?: string };
-      if (!body.token || !(await checkAdminToken(env, body.token))) {
+      if (!body.token || !(await checkAdminToken(env, env.DB, body.token))) {
         await new Promise((r) => setTimeout(r, 400)); // slow down guessing
         throw new ApiError("unauthorized", "Wrong admin token");
       }
-      return json({ ok: true }, 200, { "Set-Cookie": await createSessionCookie(env, secure) });
+      return json({ ok: true }, 200, { "Set-Cookie": await createSessionCookie(env, env.DB, secure) });
     }
     if (path === "/auth/logout" && req.method === "POST") {
       return json({ ok: true }, 200, { "Set-Cookie": clearSessionCookie(secure) });

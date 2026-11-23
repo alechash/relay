@@ -1,4 +1,4 @@
-import { adminTokenProblem } from "./auth";
+import { adminStatus } from "./auth";
 import { ensureSchema } from "./db";
 import type { Env } from "./env";
 import { renderDocs } from "./docs";
@@ -12,8 +12,13 @@ export default {
     const p = url.pathname;
 
     if (p === "/healthz") {
-      const problem = adminTokenProblem(env);
-      return json({ ok: true, configured: problem === null, admin_token: problem ?? "ok", database: !!env.DB });
+      try {
+        await ensureSchema(env.DB);
+        const status = await adminStatus(env, env.DB);
+        return json({ ok: true, configured: status === "env" || status === "database", admin_token: status });
+      } catch (err) {
+        return json({ ok: false, error: String(err) }, 500);
+      }
     }
     if (p === "/docs") return new Response(renderDocs(url.origin), { headers: { "Content-Type": "text/html; charset=utf-8" } });
     if (p === "/openapi.json") return json(buildOpenApi(url.origin));
