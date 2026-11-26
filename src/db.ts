@@ -143,6 +143,15 @@ const MIGRATIONS: { id: number; name: string; statements: string[] }[] = [
       `CREATE TABLE IF NOT EXISTS idempotency_keys (actor_id TEXT NOT NULL, key TEXT NOT NULL, response TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (actor_id, key))`,
     ],
   },
+  {
+    id: 5,
+    name: "review_policies",
+    statements: [
+      `ALTER TABLE boards ADD COLUMN agent_auto_approve TEXT NOT NULL DEFAULT '[]'`,
+      `ALTER TABLE tokens ADD COLUMN can_skip_review INTEGER NOT NULL DEFAULT 0`,
+      `ALTER TABLE events ADD COLUMN request_id TEXT`,
+    ],
+  },
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1].id;

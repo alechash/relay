@@ -53,6 +53,13 @@ In the web UI, open **Settings → API & agent tokens** and create one token per
 
 Any token can be made read-only.
 
+**Skipping sign-off where you trust an agent:**
+
+- **Per board:** set `agent_auto_approve` with `update_board`, or use Board menu → Agent auto-approve in the web UI. It lists the kinds of agent change that skip the queue: `comment`, `create`, `update`, `move`, `complete` (moves into a done column), `archive`, `structure`, or `all`.
+- **Per token:** grant `can_skip_review` (Settings → Tokens). That token can then pass `skip_review: true` on any write. Tokens without the grant get a 403; it's never silently ignored.
+
+Only humans can change either setting. Bypassed changes are still recorded, marked `auto-approved` with the reason and a `request_id`, and can still be reverted.
+
 **Claude Code (MCP):**
 
 ```sh

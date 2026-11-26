@@ -16,6 +16,18 @@ export async function runOperation(ctx: Ctx, op: Operation, raw: unknown): Promi
     throw new ApiError("forbidden", `${op.name} requires a token with write scope`);
   }
   const parsed = op.input.safeParse(raw ?? {});
+  ctx.skipReview = false; // per call: an MCP batch can carry several calls on one context
+  if (parsed.success && (parsed.data as any).skip_review === true) {
+    // Never silently honour a bypass: either the token was granted it, or the call fails.
+    if (ctx.actor.requiresReview && !ctx.actor.canSkipReview) {
+      throw new ApiError("forbidden", "skip_review is not allowed for this token. A human can grant it in Settings → Tokens (can_skip_review).");
+    }
+    ctx.skipReview = ctx.actor.requiresReview;
+  }
+  if (op.access === "write" && ctx.actor.requiresReview && !ctx.autoApprove) {
+    const { results } = await ctx.db.prepare(`SELECT id, agent_auto_approve FROM boards WHERE agent_auto_approve != '[]'`).all<any>();
+    ctx.autoApprove = new Map(results.map((r) => [r.id as string, JSON.parse(r.agent_auto_approve)]));
+  }
   if (!parsed.success) {
     throw new ApiError(
       "validation_error",

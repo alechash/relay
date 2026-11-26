@@ -448,6 +448,45 @@ describe("relay", () => {
     assert.equal((await ok("GET", `/cards/${three.id}`)).column_name, "Todo");
   });
 
+  test("auto-approve: board policy, skip_review permission, and guardrails", async () => {
+    const b = await ok("POST", "/boards", { body: { name: "Policy", columns: ["Todo", "Done"] } });
+    const card = await ok("POST", "/cards", { body: { board_id: b.id, title: "p1" } });
+    const bot = await ok("POST", "/tokens", { body: { name: "Policy bot", kind: "agent" } });
+
+    // agents cannot change the policy themselves
+    assert.equal((await call("PATCH", `/boards/${b.id}`, { token: bot.token, body: { agent_auto_approve: ["all"] } })).status, 403);
+    // unauthorized skip_review is rejected, not ignored
+    const denied = await call("POST", `/cards/${card.id}/comments`, { token: bot.token, body: { body: "hi", skip_review: true } });
+    assert.equal(denied.status, 403);
+    assert.equal((await ok("GET", `/cards/${card.id}`)).comments.length, 0);
+
+    assert.equal((await call("PATCH", `/boards/${b.id}`, { body: { agent_auto_approve: ["comment", "bogus"] } })).status, 422);
+    await ok("PATCH", `/boards/${b.id}`, { body: { agent_auto_approve: ["comment", "complete", "comment"] } });
+    assert.deepEqual((await ok("GET", `/boards/${b.id}`)).agent_auto_approve, ["comment", "complete"]);
+
+    await ok("POST", `/cards/${card.id}/comments`, { token: bot.token, body: { body: "note" } });
+    await ok("POST", `/cards/${card.id}/move`, { token: bot.token, body: { column: "Done" } });
+    await ok("PATCH", `/cards/${card.id}`, { token: bot.token, body: { title: "p1 edited" } });
+    const evs = (await ok("GET", `/cards/${card.id}/history`)).events.filter((e) => e.actor.id === bot.id);
+    const by = Object.fromEntries(evs.map((e) => [`${e.entity_type}.${e.action}`, e.review]));
+    assert.equal(by["comment.create"].status, "approved");
+    assert.equal(by["comment.create"].auto_approved, true);
+    assert.equal(by["comment.create"].reviewed_by.kind, "policy");
+    assert.match(by["comment.create"].note, /board policy \(comment\)/);
+    assert.equal(by["card.move"].status, "approved");
+    assert.equal(by["card.update"].status, "pending", "edits are not covered by this policy");
+    assert.ok(evs.every((e) => e.request_id));
+
+    // granted skip_review works and is attributed
+    await ok("PATCH", `/tokens/${bot.id}`, { body: { can_skip_review: true } });
+    await ok("PATCH", `/cards/${card.id}`, { token: bot.token, body: { title: "p1 again", skip_review: true, reason: "trusted" } });
+    const last = (await ok("GET", `/cards/${card.id}/history`)).events.at(-1);
+    assert.equal(last.review.status, "approved");
+    assert.match(last.review.note, /skip_review/);
+    assert.equal((await ok("GET", "/me", { token: bot.token })).can_skip_review, true);
+    await ok("DELETE", `/tokens/${bot.id}`);
+  });
+
   test("revoked tokens stop working", async () => {
     await ok("DELETE", `/tokens/${agentId}`);
     assert.equal((await call("GET", "/me", { token: agentToken })).status, 401);

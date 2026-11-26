@@ -1,5 +1,5 @@
-import type { Ctx } from "../context";
-import { conflict, notFound } from "../lib/errors";
+import { AUTO_APPROVE_ACTIONS, isHuman, type Ctx } from "../context";
+import { conflict, forbidden, notFound } from "../lib/errors";
 import { newId, nowIso } from "../lib/util";
 import { eventStatement } from "./events";
 import { positionAt, renumber } from "./positions";
@@ -121,8 +121,20 @@ export async function getBoard(ctx: Ctx, id: string, opts: { include_archived?: 
 
 export async function updateBoard(
   ctx: Ctx,
-  input: { board_id: string; name?: string; description?: string; archived?: boolean; position?: number; expected_version?: number; reason?: string },
+  input: {
+    board_id: string;
+    name?: string;
+    description?: string;
+    archived?: boolean;
+    position?: number;
+    agent_auto_approve?: string[];
+    expected_version?: number;
+    reason?: string;
+  },
 ) {
+  if (input.agent_auto_approve !== undefined && !isHuman(ctx.actor)) {
+    throw forbidden("Only a human can change a board's agent auto-approve policy");
+  }
   const row: any = await getBoardRow(ctx, input.board_id);
   if (input.expected_version !== undefined && input.expected_version !== row.version) {
     throw conflict(`Board was modified (version ${row.version}, expected ${input.expected_version})`, { current: boardOut(row) });
@@ -133,6 +145,10 @@ export async function updateBoard(
   if (input.name !== undefined) next.name = input.name;
   if (input.description !== undefined) next.description = input.description;
   if (input.archived !== undefined) next.archived_at = input.archived ? (row.archived_at ?? now) : null;
+  if (input.agent_auto_approve !== undefined) {
+    const allowed = new Set<string>(AUTO_APPROVE_ACTIONS);
+    next.agent_auto_approve = JSON.stringify([...new Set(input.agent_auto_approve)].filter((a) => allowed.has(a)));
+  }
   const stmts: D1PreparedStatement[] = [];
   if (input.position !== undefined) {
     const { results } = await ctx.db.prepare(`SELECT id, position FROM boards WHERE id != ? ORDER BY position`).bind(row.id).all<any>();
@@ -148,8 +164,10 @@ export async function updateBoard(
   const action = input.archived === true && !row.archived_at ? "archive" : input.archived === false && row.archived_at ? "restore" : "update";
   stmts.push(
     ctx.db
-      .prepare(`UPDATE boards SET name = ?, description = ?, archived_at = ?, position = ?, updated_at = ?, version = version + 1 WHERE id = ? AND version = ?`)
-      .bind(next.name, next.description, next.archived_at, next.position, now, row.id, row.version),
+      .prepare(
+        `UPDATE boards SET name = ?, description = ?, archived_at = ?, position = ?, agent_auto_approve = ?, updated_at = ?, version = version + 1 WHERE id = ? AND version = ?`,
+      )
+      .bind(next.name, next.description, next.archived_at, next.position, next.agent_auto_approve ?? "[]", now, row.id, row.version),
   );
   stmts.push(eventStatement(ctx, { entityType: "board", entityId: row.id, boardId: row.id, action, before, after, reason: input.reason }, true).stmt);
   const res = await ctx.db.batch(stmts);

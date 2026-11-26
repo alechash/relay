@@ -140,7 +140,7 @@ export async function authenticate(req: Request, env: Env, db: D1Database, waitU
         const stale = !row.last_used_at || Date.now() - Date.parse(row.last_used_at) > 5 * 60 * 1000;
         if (stale) waitUntil(db.prepare(`UPDATE tokens SET last_used_at = ? WHERE id = ?`).bind(nowIso(), row.id).run());
         return {
-          actor: { id: row.id, name: row.name, kind: row.kind, scope: row.scope, requiresReview: !!row.requires_review },
+          actor: { id: row.id, name: row.name, kind: row.kind, scope: row.scope, requiresReview: !!row.requires_review, canSkipReview: !!row.can_skip_review },
           cookie: false,
         };
       }

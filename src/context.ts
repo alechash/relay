@@ -11,7 +11,12 @@ export interface Actor {
   scope: "read" | "write";
   /** When true, every change this actor makes lands in the sign-off queue. */
   requiresReview: boolean;
+  /** Granted by a human: this token may pass skip_review: true on writes. */
+  canSkipReview?: boolean;
 }
+
+export const AUTO_APPROVE_ACTIONS = ["comment", "create", "update", "move", "complete", "archive", "structure", "all"] as const;
+export type AutoApproveAction = (typeof AUTO_APPROVE_ACTIONS)[number];
 
 export interface Ctx {
   env: Env;
@@ -23,6 +28,12 @@ export interface Ctx {
   /** Groups related changes, e.g. one MCP connection or one agent run (X-Relay-Session). */
   sessionId: string | null;
   waitUntil: (p: Promise<unknown>) => void;
+  /** Request identifier recorded on every event (cf-ray when available). */
+  requestId?: string | null;
+  /** Set when the caller passed skip_review: true and is allowed to. */
+  skipReview?: boolean;
+  /** Board id → agent auto-approve policy, loaded per request for actors that require review. */
+  autoApprove?: Map<string, AutoApproveAction[]>;
 }
 
 export const isHuman = (a: Actor) => a.kind === "owner" || a.kind === "human";

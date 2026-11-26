@@ -530,11 +530,44 @@ function boardMenu(anchor) {
     { label: "Add column…", run: addColumn },
     { label: state.showArchived ? "Hide archived" : "Show archived", run: async () => { state.showArchived = !state.showArchived; await loadBoard(b.id); renderLanes(); } },
     { label: "Board history", run: () => navigate(`/activity?board_id=${b.id}`) },
+    { label: "Agent auto-approve…", run: editAutoApprove },
     "-",
     b.archived
       ? { label: "Restore board", run: () => setBoardArchived(false) }
       : { label: "Archive board", danger: true, run: () => setBoardArchived(true) },
   ]);
+}
+
+const AUTO_APPROVE = [
+  ["comment", "Comments"],
+  ["create", "Creating cards"],
+  ["update", "Editing cards"],
+  ["move", "Moving cards (any column)"],
+  ["complete", "Moving cards into a done column"],
+  ["archive", "Archiving / restoring cards"],
+  ["structure", "Board and column changes"],
+  ["all", "Everything"],
+];
+
+async function editAutoApprove() {
+  const b = state.board;
+  const current = new Set(b.agent_auto_approve || []);
+  const v = await dialog({
+    title: "Agent auto-approve on this board",
+    submit: "Save",
+    fields: [
+      ...AUTO_APPROVE.map(([value, label]) => ({ name: value, type: "checkbox", label, value: current.has(value) })),
+    ],
+  });
+  if (!v) return;
+  const next = AUTO_APPROVE.map(([value]) => value).filter((k) => v[k]);
+  try {
+    await api("PATCH", `/boards/${b.id}`, { agent_auto_approve: next, reason: "Changed agent auto-approve policy" });
+    await loadBoard(b.id);
+    toast(next.length ? `Agent ${next.join(", ")} changes on this board now skip sign-off` : "All agent changes on this board need sign-off again");
+  } catch (err) {
+    fail(err);
+  }
 }
 
 async function setBoardArchived(archived) {
@@ -1213,7 +1246,11 @@ function renderDiff(e, refs) {
 
 function renderEvent(e, refs, opts = {}) {
   const agent = e.actor.kind === "agent";
-  const status = e.reverted_by ? h("span", { class: "status status-reverted" }, "reverted") : e.review.status !== "none" ? h("span", { class: `status status-${e.review.status}`, title: e.review.reviewed_by ? `${e.review.status} by ${e.review.reviewed_by.name}${e.review.note ? `: ${e.review.note}` : ""}` : null }, e.review.status === "pending" ? "awaiting sign-off" : e.review.status) : null;
+  const status = e.reverted_by
+    ? h("span", { class: "status status-reverted" }, "reverted")
+    : e.review.auto_approved
+      ? h("span", { class: "status status-approved", title: e.review.note || "Auto-approved" }, "auto-approved")
+      : e.review.status !== "none" ? h("span", { class: `status status-${e.review.status}`, title: e.review.reviewed_by ? `${e.review.status} by ${e.review.reviewed_by.name}${e.review.note ? `: ${e.review.note}` : ""}` : null }, e.review.status === "pending" ? "awaiting sign-off" : e.review.status) : null;
   const revertable = state.me?.can_review && !e.reverted_by && e.action !== "revert" && ["card", "column", "board", "comment"].includes(e.entity_type) && !(e.entity_type === "comment" && e.action === "delete");
   const actions =
     e.review.status === "pending" && state.me?.can_review
@@ -1389,13 +1426,16 @@ async function showSettings() {
                 "div",
                 { class: "token-row" },
                 t.kind === "agent" ? h("span", { class: "agent-tag" }, icon("bot"), t.name) : h("span", { class: "name" }, t.name),
-                h("span", { class: "muted small" }, `${t.kind} · ${t.scope}${t.requires_review ? " · needs sign-off" : ""}`),
+                h("span", { class: "muted small" }, `${t.kind} · ${t.scope}${t.requires_review ? " · needs sign-off" : ""}${t.can_skip_review ? " · may skip_review" : ""}`),
                 h("span", { class: "faint xs mono" }, t.prefix + "…"),
                 h("span", { class: "faint xs" }, t.last_used_at ? ["used ", timeEl(t.last_used_at)] : "never used"),
                 h(
                   "div",
                   { class: "actions" },
                   h("button", { class: "btn btn-sm", onclick: async () => { await api("PATCH", `/tokens/${t.id}`, { requires_review: !t.requires_review }).catch(fail); renderTokens(); } }, t.requires_review ? "Stop requiring sign-off" : "Require sign-off"),
+                  t.requires_review
+                    ? h("button", { class: "btn btn-sm", title: "Lets this token pass skip_review: true to apply a change without sign-off", onclick: async () => { await api("PATCH", `/tokens/${t.id}`, { can_skip_review: !t.can_skip_review }).catch(fail); renderTokens(); } }, t.can_skip_review ? "Disallow skip_review" : "Allow skip_review")
+                    : null,
                   h("button", { class: "btn btn-sm btn-danger", onclick: async () => { if (await confirmDialog(`Revoke “${t.name}”? Anything using it stops working immediately.`, "Revoke")) { await api("DELETE", `/tokens/${t.id}`).catch(fail); renderTokens(); } } }, "Revoke"),
                 ),
               ),

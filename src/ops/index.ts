@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { isHuman } from "../context";
+import { AUTO_APPROVE_ACTIONS, isHuman } from "../context";
 import { createBoard, getBoard, listBoards, updateBoard } from "../core/boards";
 import {
   addComment,
@@ -63,6 +63,7 @@ export const operations: Operation[] = [
       actor: { id: ctx.actor.id, name: ctx.actor.name, kind: ctx.actor.kind },
       scope: ctx.actor.scope,
       requires_review: ctx.actor.requiresReview,
+      can_skip_review: !!ctx.actor.canSkipReview,
       can_review: isHuman(ctx.actor),
       via: ctx.via,
       session_id: ctx.sessionId,
@@ -130,6 +131,12 @@ export const operations: Operation[] = [
       description: z.string().max(10000).optional(),
       archived: z.boolean().optional(),
       position: z.number().int().min(0).optional().describe("0-based index among boards"),
+      agent_auto_approve: z
+        .array(z.enum(AUTO_APPROVE_ACTIONS))
+        .optional()
+        .describe(
+          "Humans only. Agent changes of these kinds on this board skip the sign-off queue (recorded as auto-approved): comment, create, update, move, complete (moves into a done column), archive, structure (board/column changes), all. [] turns it off.",
+        ),
       expected_version: expectedVersion,
       reason,
     }),
@@ -581,6 +588,7 @@ export const operations: Operation[] = [
       kind: z.enum(["agent", "human"]),
       scope: z.enum(["read", "write"]).optional().describe("Default write"),
       requires_review: z.boolean().optional().describe("Default: true for agents, false for humans"),
+      can_skip_review: z.boolean().optional().describe("Allow this token to pass skip_review: true on writes. Default false"),
     }),
     handler: (ctx, i) => createToken(ctx, i),
   }),
@@ -596,6 +604,7 @@ export const operations: Operation[] = [
       name: z.string().min(1).max(100).optional(),
       scope: z.enum(["read", "write"]).optional(),
       requires_review: z.boolean().optional(),
+      can_skip_review: z.boolean().optional(),
     }),
     handler: (ctx, i) => updateToken(ctx, i),
   }),
@@ -643,5 +652,18 @@ export const operations: Operation[] = [
     },
   }),
 ];
+
+// Every write accepts skip_review. It is only honoured for tokens granted can_skip_review;
+// anyone else passing it gets a 403 (see runOperation).
+for (const o of operations) {
+  if (o.access === "write") {
+    o.input = o.input.extend({
+      skip_review: z
+        .boolean()
+        .optional()
+        .describe("Apply without queuing for sign-off. Only for tokens granted can_skip_review; otherwise the call is rejected. Recorded as auto-approved."),
+    });
+  }
+}
 
 export const operationsByName = new Map(operations.map((o) => [o.name, o]));

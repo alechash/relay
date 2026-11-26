@@ -159,7 +159,16 @@ export async function handleMcp(req: Request, env: Env, exec: ExecutionContext):
   }
 
   const { sessionId, client } = decodeSession(req.headers.get("Mcp-Session-Id"));
-  const ctx: Ctx = { env, db: env.DB, actor: auth.actor, via: "mcp", client, sessionId, waitUntil: (p) => exec.waitUntil(p) };
+  const ctx: Ctx = {
+    env,
+    db: env.DB,
+    actor: auth.actor,
+    via: "mcp",
+    client,
+    sessionId,
+    waitUntil: (p) => exec.waitUntil(p),
+    requestId: req.headers.get("cf-ray") ?? crypto.randomUUID(),
+  };
   const newSession = { value: null as string | null };
 
   const messages = Array.isArray(body) ? body : [body];

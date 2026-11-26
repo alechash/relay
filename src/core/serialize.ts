@@ -12,6 +12,7 @@ export function boardOut(r: any) {
     name: r.name as string,
     description: r.description as string,
     position: r.position as number,
+    agent_auto_approve: parseJson<string[]>(r.agent_auto_approve, []),
     archived: r.archived_at != null,
     archived_at: (r.archived_at as string | null) ?? null,
     created_at: r.created_at as string,
@@ -98,9 +99,13 @@ export function eventOut(r: any) {
     review: {
       status: r.review_status as "none" | "pending" | "approved" | "rejected",
       reviewed_at: (r.reviewed_at as string | null) ?? null,
-      reviewed_by: r.reviewed_by_id ? ({ id: r.reviewed_by_id, name: r.reviewed_by_name, kind: "human" } as ActorRef) : null,
+      reviewed_by: r.reviewed_by_id
+        ? ({ id: r.reviewed_by_id, name: r.reviewed_by_name, kind: String(r.reviewed_by_id).startsWith("policy:") ? "policy" : "human" } as ActorRef)
+        : null,
+      auto_approved: String(r.reviewed_by_id ?? "").startsWith("policy:"),
       note: (r.review_note as string | null) ?? null,
     },
+    request_id: (r.request_id as string | null) ?? null,
     reverted_by: (r.reverted_by as string | null) ?? null,
     revert_of: (r.revert_of as string | null) ?? null,
   };
@@ -114,6 +119,7 @@ export function tokenOut(r: any) {
     kind: r.kind as "human" | "agent",
     scope: r.scope as "read" | "write",
     requires_review: !!r.requires_review,
+    can_skip_review: !!r.can_skip_review,
     prefix: r.token_prefix as string,
     created_at: r.created_at as string,
     last_used_at: (r.last_used_at as string | null) ?? null,
