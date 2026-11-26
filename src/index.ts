@@ -5,6 +5,7 @@ import { renderDocs } from "./docs";
 import { handleMcp } from "./mcp";
 import { API_PREFIX, errorResponse, handleApi, json } from "./rest";
 import { buildOpenApi } from "./openapi";
+import { handleHook, runScheduled } from "./core/webhooks";
 
 export default {
   async fetch(req: Request, env: Env, exec: ExecutionContext): Promise<Response> {
@@ -23,6 +24,16 @@ export default {
     if (p === "/docs") return new Response(renderDocs(url.origin), { headers: { "Content-Type": "text/html; charset=utf-8" } });
     if (p === "/openapi.json") return json(buildOpenApi(url.origin));
 
+    const hook = /^\/hooks\/([A-Za-z0-9_]+)\/?$/.exec(p);
+    if (hook) {
+      try {
+        await ensureSchema(env.DB);
+        return await handleHook(req, env, exec, hook[1]);
+      } catch (err) {
+        return errorResponse(err);
+      }
+    }
+
     if (p === API_PREFIX || p.startsWith(API_PREFIX + "/") || p === "/mcp" || p.startsWith("/mcp/")) {
       try {
         await ensureSchema(env.DB);
@@ -33,5 +44,11 @@ export default {
     }
 
     return env.ASSETS.fetch(req);
+  },
+
+  /** Cron (every minute): retry outbound webhook deliveries and prune old bookkeeping. */
+  async scheduled(_event: ScheduledController, env: Env, exec: ExecutionContext): Promise<void> {
+    await ensureSchema(env.DB);
+    exec.waitUntil(runScheduled(env));
   },
 } satisfies ExportedHandler<Env>;

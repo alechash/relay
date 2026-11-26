@@ -88,6 +88,24 @@ curl -X POST https://<your-worker>/api/v1/cards \
 
 Optional headers: `X-Relay-Session` groups related changes for review, and `X-Relay-Client` names the client in the history.
 
+## Webhooks
+
+Manage webhooks in Settings → Webhooks, or with the `*_webhook` operations. Each one has its own secret, which is shown once and can be rotated. Every delivery is logged.
+
+- **Inbound** (`POST /hooks/{id}`) creates a card from JSON `{title, description?, tags?, source?, priority?, due_on?}`.
+  - **Auth:** either `Authorization: Bearer <secret>`, or `X-Relay-Timestamp` + `X-Relay-Signature: sha256=hex(HMAC_SHA256(secret, "<timestamp>.<raw body>"))`. Signed requests must be within ±5 minutes.
+  - **Retries:** send `X-Relay-Delivery` (or `delivery_id`) and a repeat returns the original card instead of creating another.
+  - **Limits:** 64 KB body.
+- **Outbound** POSTs a signed, versioned `card.entered_column` payload when a card is created in, or moved into, one of the configured columns.
+  - **Signing:** same scheme as inbound, plus `X-Relay-Event-Id` for deduplication.
+  - **When it fires:** never on unrelated edits or reorders within a column.
+  - **Retries:** failures retry with backoff (1m, 5m, 30m, 2h, 12h) from the per-minute cron, then the delivery is marked `dead`. Permanent 4xx responses are marked `dead` immediately.
+  - **Reporting back:** a runner can report progress with its own Relay token (`add_comment`, `move_card`).
+- **GitHub** (`POST /hooks/{id}`) handles `pull_request` and `pull_request_review` events, verified with `X-Hub-Signature-256` and deduplicated on `X-GitHub-Delivery`.
+  - **Linking:** PRs that mention `relay-123` in the branch, title or body get a comment on card #123.
+  - **Moving cards:** optionally moves the card per `on_open` / `on_ready_for_review` / `on_review_approved` / `on_changes_requested` / `on_merge` / `on_close` (column names).
+  - **Scope:** limit with `repos` and the webhook's board.
+
 ## API
 
 - Human-readable reference: `https://<your-worker>/docs`
@@ -105,6 +123,7 @@ Optional headers: `X-Relay-Session` groups related changes for review, and `X-Re
 | History | `GET /events` · `GET /events/{id}` · `POST /events/{id}/revert` |
 | Sign-off | `GET /reviews` · `POST /reviews/approve` · `POST /reviews/reject` |
 | Tokens | `GET/POST /tokens` · `PATCH/DELETE /tokens/{id}` |
+| Webhooks | `GET/POST /webhooks` · `PATCH /webhooks/{id}` (disable, rotate secret) · `GET /webhooks/deliveries` · `POST /webhooks/deliveries/{id}/retry` |
 
 Conventions:
 

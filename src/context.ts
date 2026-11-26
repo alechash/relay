@@ -28,6 +28,8 @@ export interface Ctx {
   /** Groups related changes, e.g. one MCP connection or one agent run (X-Relay-Session). */
   sessionId: string | null;
   waitUntil: (p: Promise<unknown>) => void;
+  /** Public origin of this deployment, e.g. https://relay.example.workers.dev */
+  origin?: string;
   /** Request identifier recorded on every event (cf-ray when available). */
   requestId?: string | null;
   /** Set when the caller passed skip_review: true and is allowed to. */

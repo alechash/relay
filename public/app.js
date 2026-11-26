@@ -1488,6 +1488,7 @@ async function showSettings() {
         secretBox,
         h("div", { style: "margin-top: var(--space-4)" }, tokensBox),
       ),
+      webhooksPanel(origin),
       h(
         "section",
         { class: "panel" },
@@ -1529,6 +1530,160 @@ async function showSettings() {
     ),
   );
   renderTokens();
+}
+
+// ------------------------------------------------------------------ webhooks (settings panel)
+
+function webhooksPanel(origin) {
+  const list = h("div", {});
+  const secretBox = h("div", {});
+  const form = h("form", {});
+  const csv = (v) => v.split(",").map((x) => x.trim()).filter(Boolean);
+  const snippet = (label, text) => h("div", {}, h("div", { class: "small muted", style: "margin-bottom: var(--space-1)" }, label), h("div", { class: "copy-row" }, h("pre", {}, text), h("button", { class: "btn btn-sm", type: "button", onclick: () => copy(text) }, "Copy")));
+
+  const KIND_HELP = {
+    inbound: "Creates a card on a board whenever something POSTs to its URL (alerts, forms, Zapier, scripts).",
+    outbound: "Sends a signed POST to your URL whenever a card is created in, or moved into, one of the trigger columns. Use it to start a local agent runner.",
+    github: "Links pull requests to cards mentioned as relay-123 in the branch, title or body, and moves those cards when the PR is opened or merged.",
+  };
+
+  const renderForm = (kind = "inbound") => {
+    const f = {};
+    const input = (name, label, attrs = {}) => {
+      f[name] = h("input", { class: "input", ...attrs });
+      return h("label", { class: "field" }, label, f[name]);
+    };
+    const kindSel = h("select", { class: "select", onchange: (e) => renderForm(e.target.value) }, ["inbound", "outbound", "github"].map((k) => h("option", { value: k, selected: k === kind }, k[0].toUpperCase() + k.slice(1))));
+    f.board = h("select", { class: "select" }, kind === "inbound" ? null : h("option", { value: "" }, "Any board"), state.boards.map((b) => h("option", { value: b.id, selected: b.id === state.board?.id }, b.name)));
+    const specific =
+      kind === "inbound"
+        ? [input("column", "Column (blank: first column)", { placeholder: "To do" }), input("labels", "Labels to add", { placeholder: "inbox, alert" })]
+        : kind === "outbound"
+          ? [input("url", "URL", { type: "url", required: true, placeholder: "https://runner.example.com/relay" }), input("columns", "Trigger columns", { required: true, placeholder: "Ready for Dev" })]
+          : [
+              input("repos", "Repositories (blank: any)", { placeholder: "alechash/relay" }),
+              input("on_open", "On PR opened, move to", { placeholder: "Review" }),
+              input("on_merge", "On PR merged, move to", { placeholder: "Done" }),
+              input("on_review_approved", "On review approved, move to", { placeholder: "" }),
+            ];
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      const config =
+        kind === "inbound"
+          ? { column: f.column.value.trim() || undefined, labels: csv(f.labels.value) }
+          : kind === "outbound"
+            ? { url: f.url.value.trim(), columns: csv(f.columns.value) }
+            : { repos: csv(f.repos.value), on_open: f.on_open.value.trim() || null, on_merge: f.on_merge.value.trim() || null, on_review_approved: f.on_review_approved.value.trim() || null };
+      try {
+        const w = await api("POST", "/webhooks", { kind, name: f.name.value.trim(), board_id: f.board.value || null, config });
+        showSecret(w);
+        renderForm(kind);
+        load();
+      } catch (err) {
+        fail(err);
+      }
+    };
+    form.replaceChildren(
+      h("p", { class: "small muted" }, KIND_HELP[kind]),
+      h("div", { class: "form-row" }, h("label", { class: "field" }, "Kind", kindSel), input("name", "Name", { required: true, placeholder: kind === "github" ? "relay repo" : kind === "outbound" ? "Claude runner" : "Grafana alerts" }), h("label", { class: "field" }, "Board", f.board)),
+      h("div", { class: "form-row" }, specific),
+      h("div", { style: "margin-top: var(--space-3)" }, h("button", { class: "btn btn-primary", type: "submit" }, "Create webhook")),
+    );
+  };
+
+  const showSecret = (w) => {
+    const parts = [h("strong", {}, `Secret for “${w.name}”. Copy it now. It won't be shown again.`), snippet("Secret", w.secret)];
+    if (w.kind === "inbound") {
+      parts.push(snippet("Endpoint", w.endpoint));
+      parts.push(snippet("Try it", `curl -X POST ${w.endpoint} \\\n  -H "Authorization: Bearer ${w.secret}" -H "Content-Type: application/json" \\\n  -d '{"title":"Hello from a webhook","tags":["inbox"],"source":"curl"}'`));
+    } else if (w.kind === "github") {
+      parts.push(snippet("Payload URL (GitHub → repo Settings → Webhooks → Add webhook)", w.endpoint));
+      parts.push(h("p", { class: "small" }, "Content type: application/json · Secret: the value above · Events: Pull requests and Pull request reviews. Then name branches or PR titles like relay-123."));
+    } else {
+      parts.push(h("p", { class: "small" }, "Verify each request: X-Relay-Signature must equal sha256= followed by the hex HMAC-SHA256 of the X-Relay-Timestamp value, a dot, and the raw body, keyed with this secret. Deduplicate on X-Relay-Event-Id."));
+    }
+    parts.push(h("button", { class: "btn btn-sm", type: "button", onclick: () => secretBox.replaceChildren() }, "Done"));
+    secretBox.replaceChildren(h("div", { class: "secret" }, parts));
+  };
+
+  const deliveries = async (w, box) => {
+    if (box.childElementCount) return box.replaceChildren();
+    try {
+      const { deliveries } = await api("GET", `/webhooks/deliveries${qs({ webhook_id: w.id, limit: 20 })}`);
+      box.replaceChildren(
+        deliveries.length
+          ? h(
+              "div",
+              { class: "timeline small", style: "margin-top: var(--space-2)" },
+              deliveries.map((d) =>
+                h(
+                  "div",
+                  { class: "token-row" },
+                  h("span", { class: `status status-${{ delivered: "approved", processed: "approved", pending: "pending", dead: "rejected", rejected: "rejected" }[d.status] || "reverted"}` }, d.status),
+                  h("span", { class: "mono xs" }, d.event_type || ""),
+                  h("span", { class: "faint xs" }, timeEl(d.created_at), d.attempts > 1 ? ` · ${d.attempts} attempts` : ""),
+                  d.last_error ? h("span", { class: "xs", style: "color: var(--color-danger)" }, d.last_error) : null,
+                  d.result?.card ? h("a", { href: `/c/${d.result.card.number}`, "data-link": true, class: "xs" }, d.result.card.ref) : null,
+                  d.direction === "out" && d.status !== "delivered"
+                    ? h("div", { class: "actions" }, h("button", { class: "btn btn-sm", onclick: async () => { await api("POST", `/webhooks/deliveries/${d.id}/retry`).catch(fail); box.replaceChildren(); deliveries(w, box); } }, "Retry now"))
+                    : null,
+                ),
+              ),
+            )
+          : h("p", { class: "faint small" }, "No deliveries yet."),
+      );
+    } catch (err) {
+      fail(err);
+    }
+  };
+
+  const load = async () => {
+    try {
+      const { webhooks } = await api("GET", "/webhooks?include_revoked=true");
+      list.replaceChildren(
+        ...(webhooks.length
+          ? webhooks.map((w) => {
+              const box = h("div", {});
+              const board = state.boards.find((b) => b.id === w.board_id)?.name;
+              const summary =
+                w.kind === "outbound"
+                  ? `→ ${w.config.url} when cards enter ${w.config.columns.join(", ")}`
+                  : w.kind === "github"
+                    ? `${(w.config.repos || []).join(", ") || "any repo"}${w.config.on_open ? ` · open → ${w.config.on_open}` : ""}${w.config.on_merge ? ` · merge → ${w.config.on_merge}` : ""}`
+                    : `→ ${board ?? "board"}${w.config.column ? ` / ${w.config.column}` : ""}`;
+              return h(
+                "div",
+                { style: "border-top: 1px solid var(--color-rule); padding: var(--space-3) 0" },
+                h(
+                  "div",
+                  { class: "token-row", style: "border:0; padding:0" },
+                  h("span", { class: "name" }, w.name),
+                  h("span", { class: "label" }, w.kind),
+                  !w.active ? h("span", { class: "status status-reverted" }, "disabled") : null,
+                  w.failures ? h("span", { class: "status status-rejected" }, `${w.failures} failed`) : null,
+                  h(
+                    "div",
+                    { class: "actions" },
+                    h("button", { class: "btn btn-sm", onclick: () => deliveries(w, box) }, "Deliveries"),
+                    h("button", { class: "btn btn-sm", onclick: async () => { if (await confirmDialog(`Rotate the secret for “${w.name}”? The old one stops working immediately.`, "Rotate")) { try { showSecret(await api("PATCH", `/webhooks/${w.id}`, { rotate_secret: true })); } catch (err) { fail(err); } } } }, "Rotate secret"),
+                    h("button", { class: "btn btn-sm" + (w.active ? " btn-danger" : ""), onclick: async () => { await api("PATCH", `/webhooks/${w.id}`, { active: !w.active }).catch(fail); load(); } }, w.active ? "Disable" : "Enable"),
+                  ),
+                ),
+                h("div", { class: "small muted", style: "margin-top: var(--space-1); overflow-wrap:anywhere" }, summary),
+                w.endpoint ? h("div", { class: "xs faint mono", style: "overflow-wrap:anywhere" }, w.endpoint) : null,
+                box,
+              );
+            })
+          : [h("p", { class: "faint small", style: "margin-top: var(--space-3)" }, "No webhooks yet.")]),
+      );
+    } catch (err) {
+      fail(err);
+    }
+  };
+
+  renderForm();
+  load();
+  return h("section", { class: "panel" }, h("h2", {}, "Webhooks"), h("p", {}, "Connect alerts, forms, GitHub, or a local agent runner. Each webhook has its own secret, and every delivery is logged."), form, secretBox, h("div", { style: "margin-top: var(--space-4)" }, list));
 }
 
 // ------------------------------------------------------------------ markdown (small, safe subset)

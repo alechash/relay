@@ -168,6 +168,7 @@ export async function handleMcp(req: Request, env: Env, exec: ExecutionContext):
     sessionId,
     waitUntil: (p) => exec.waitUntil(p),
     requestId: req.headers.get("cf-ray") ?? crypto.randomUUID(),
+    origin: new URL(req.url).origin,
   };
   const newSession = { value: null as string | null };
 

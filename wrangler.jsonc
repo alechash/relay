@@ -10,12 +10,14 @@
     "directory": "./public",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*", "/mcp", "/mcp/*", "/docs", "/healthz", "/openapi.json"]
+    "run_worker_first": ["/api/*", "/mcp", "/mcp/*", "/hooks/*", "/docs", "/healthz", "/openapi.json"]
   },
   // No database_id needed: Wrangler / the Deploy button provisions the D1
   // database automatically on first deploy. The schema is applied by the
   // Worker itself on first request (see src/db.ts), so there is no separate
   // migration step.
+  // Every minute: retry outbound webhook deliveries that failed, prune old logs.
+  "triggers": { "crons": ["* * * * *"] },
   "d1_databases": [{ "binding": "DB", "database_name": "relay" }],
   // Keep variables added in the dashboard when this config is deployed
   // (otherwise each deploy resets plain-text vars to the ones listed below).

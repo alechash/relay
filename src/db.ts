@@ -152,6 +152,42 @@ const MIGRATIONS: { id: number; name: string; statements: string[] }[] = [
       `ALTER TABLE events ADD COLUMN request_id TEXT`,
     ],
   },
+  {
+    id: 6,
+    name: "webhooks",
+    statements: [
+      `CREATE TABLE IF NOT EXISTS webhooks (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        name TEXT NOT NULL,
+        board_id TEXT,
+        secret TEXT NOT NULL,
+        config TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        revoked_at TEXT
+      )`,
+      `CREATE TABLE IF NOT EXISTS webhook_deliveries (
+        id TEXT PRIMARY KEY,
+        webhook_id TEXT NOT NULL,
+        direction TEXT NOT NULL,
+        external_id TEXT,
+        event_type TEXT,
+        status TEXT NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        next_attempt_at TEXT,
+        last_error TEXT,
+        response_status INTEGER,
+        payload TEXT,
+        result TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_deliveries_external ON webhook_deliveries(webhook_id, external_id) WHERE external_id IS NOT NULL`,
+      `CREATE INDEX IF NOT EXISTS idx_deliveries_due ON webhook_deliveries(status, next_attempt_at)`,
+      `CREATE INDEX IF NOT EXISTS idx_deliveries_hook ON webhook_deliveries(webhook_id, created_at)`,
+    ],
+  },
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1].id;

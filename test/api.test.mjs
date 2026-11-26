@@ -1,6 +1,8 @@
 // End-to-end tests against a real local Worker (wrangler dev + local D1).
 // Run with: npm test
 import { spawn } from "node:child_process";
+import { createHmac } from "node:crypto";
+import { createServer } from "node:http";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -485,6 +487,173 @@ describe("relay", () => {
     assert.match(last.review.note, /skip_review/);
     assert.equal((await ok("GET", "/me", { token: bot.token })).can_skip_review, true);
     await ok("DELETE", `/tokens/${bot.id}`);
+  });
+
+  test("webhooks: inbound HMAC/bearer, replay window, idempotency", async () => {
+    const b = await ok("POST", "/boards", { body: { name: "Inbox", columns: ["Triage", "Done"] } });
+    const hook = await ok("POST", "/webhooks", { body: { kind: "inbound", name: "Alerts", board_id: b.id, config: { labels: ["alert"] } } });
+    assert.ok(hook.secret.startsWith("whsec_"));
+    assert.ok(hook.endpoint.endsWith(`/hooks/${hook.id}`));
+    assert.ok(!("secret" in (await ok("GET", "/webhooks")).webhooks[0]));
+
+    const post = (body, headers) => fetch(`${BASE}/hooks/${hook.id}`, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body });
+    const sign = (body, ts = Math.floor(Date.now() / 1000)) => ({
+      "X-Relay-Timestamp": String(ts),
+      "X-Relay-Signature": "sha256=" + createHmac("sha256", hook.secret).update(`${ts}.${body}`).digest("hex"),
+    });
+
+    const body = JSON.stringify({ title: "Disk 90% on db-1", tags: ["ops"], source: "grafana", priority: "high" });
+    let r = await post(body, { ...sign(body), "X-Relay-Delivery": "d-1" });
+    assert.equal(r.status, 201);
+    const created = await r.json();
+    const card = await ok("GET", `/cards/${created.card.id}`);
+    assert.deepEqual(card.labels, ["ops", "alert"]);
+    assert.equal(card.priority, "high");
+    assert.match(card.description, /Source: grafana/);
+    assert.equal(card.created_by.name, "Webhook: Alerts");
+
+    r = await post(body, { ...sign(body), "X-Relay-Delivery": "d-1" });
+    assert.equal(r.status, 200);
+    assert.equal((await r.json()).duplicate, true);
+    assert.equal((await ok("GET", `/search?board_id=${b.id}`)).total, 1);
+
+    assert.equal((await post(body, { ...sign(body, Math.floor(Date.now() / 1000) - 900) })).status, 401, "stale timestamp");
+    assert.equal((await post(body, { "X-Relay-Timestamp": "1", "X-Relay-Signature": "sha256=00" })).status, 401);
+    assert.equal((await post(JSON.stringify({ title: "via bearer" }), { Authorization: `Bearer ${hook.secret}` })).status, 201);
+    assert.equal((await post(JSON.stringify({ title: "x" }), { Authorization: "Bearer wrong" })).status, 401);
+    assert.equal((await post(JSON.stringify({}), { Authorization: `Bearer ${hook.secret}` })).status, 422);
+
+    const rotated = await ok("PATCH", `/webhooks/${hook.id}`, { body: { rotate_secret: true } });
+    assert.notEqual(rotated.secret, hook.secret);
+    assert.equal((await post(JSON.stringify({ title: "old" }), { Authorization: `Bearer ${hook.secret}` })).status, 401);
+    await ok("PATCH", `/webhooks/${hook.id}`, { body: { active: false } });
+    assert.equal((await post(JSON.stringify({ title: "off" }), { Authorization: `Bearer ${rotated.secret}` })).status, 404);
+
+    const log = (await ok("GET", `/webhooks/deliveries?webhook_id=${hook.id}`)).deliveries;
+    assert.ok(log.some((d) => d.status === "rejected"));
+    assert.ok(log.some((d) => d.status === "processed" && d.external_id === "d-1"));
+  });
+
+  test("webhooks: outbound dispatch on entering a trigger column, signed, deduplicated", async () => {
+    const received = [];
+    let fail = 1;
+    const server = createServer((req, res) => {
+      let data = "";
+      req.on("data", (c) => (data += c));
+      req.on("end", () => {
+        received.push({ headers: req.headers, body: data });
+        if (fail-- > 0) {
+          res.writeHead(503);
+          return res.end("busy");
+        }
+        res.writeHead(200);
+        res.end("ok");
+      });
+    });
+    await new Promise((r) => server.listen(0, "127.0.0.1", r));
+    const port = server.address().port;
+    try {
+      const b = await ok("POST", "/boards", { body: { name: "Dev", columns: ["Backlog", "Ready for Dev", "Done"] } });
+      const hook = await ok("POST", "/webhooks", {
+        body: { kind: "outbound", name: "Runner", board_id: b.id, config: { url: `http://127.0.0.1:${port}/run`, columns: ["ready for dev"] } },
+      });
+      const c = await ok("POST", "/cards", { body: { board_id: b.id, title: "Build feature", labels: ["dev"] } });
+      await ok("PATCH", `/cards/${c.id}`, { body: { title: "Build feature X" } }); // unrelated edit: no dispatch
+      await ok("POST", `/cards/${c.id}/move`, { body: { column: "Ready for Dev" } });
+      await ok("POST", `/cards/${c.id}/move`, { body: { position: 0 } }); // reorder within column: no dispatch
+      const deadline = Date.now() + 5000;
+      while (received.length < 1 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
+      assert.equal(received.length, 1);
+      const first = received[0];
+      const payload = JSON.parse(first.body);
+      assert.equal(payload.type, "card.entered_column");
+      assert.equal(payload.version, 1);
+      assert.equal(payload.card.title, "Build feature X");
+      assert.equal(payload.column.name, "Ready for Dev");
+      assert.ok(!first.body.includes(hook.secret), "secret never in payload");
+      const expected = "sha256=" + createHmac("sha256", hook.secret).update(`${first.headers["x-relay-timestamp"]}.${first.body}`).digest("hex");
+      assert.equal(first.headers["x-relay-signature"], expected);
+
+      // first attempt got a 503 → pending with backoff; manual retry delivers
+      let [d] = (await ok("GET", `/webhooks/deliveries?webhook_id=${hook.id}`)).deliveries;
+      assert.equal(d.status, "pending");
+      assert.equal(d.response_status, 503);
+      assert.ok(d.next_attempt_at);
+      d = await ok("POST", `/webhooks/deliveries/${d.id}/retry`);
+      assert.equal(d.status, "delivered");
+      assert.equal(d.attempts, 2);
+      assert.equal(received[1].headers["x-relay-event-id"], payload.event_id);
+    } finally {
+      server.close();
+    }
+  });
+
+  test("webhooks: GitHub PR events link and move cards", async () => {
+    const b = await ok("POST", "/boards", { body: { name: "Code", columns: ["Todo", "Review", "Done"] } });
+    const card = await ok("POST", "/cards", { body: { board_id: b.id, title: "Add search" } });
+    const hook = await ok("POST", "/webhooks", {
+      body: { kind: "github", name: "relay repo", board_id: b.id, config: { repos: ["alechash/relay"], on_open: "Review", on_merge: "Done" } },
+    });
+    let n = 0;
+    const send = (event, payload, sig) => {
+      const body = JSON.stringify(payload);
+      return fetch(`${BASE}/hooks/${hook.id}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-GitHub-Event": event,
+          "X-GitHub-Delivery": `gh-${++n}`,
+          "X-Hub-Signature-256": sig ?? "sha256=" + createHmac("sha256", hook.secret).update(body).digest("hex"),
+        },
+        body,
+      });
+    };
+    const pr = (extra) => ({
+      number: 7,
+      html_url: "https://github.com/alechash/relay/pull/7",
+      title: "Add search",
+      body: "",
+      state: "open",
+      merged: false,
+      draft: false,
+      head: { ref: `relay-${card.number}-search` },
+      ...extra,
+    });
+    const repo = { full_name: "alechash/relay" };
+
+    assert.equal((await send("ping", { zen: "hi" })).status, 200);
+    assert.equal((await send("pull_request", { action: "opened", pull_request: pr(), repository: repo }, "sha256=bad")).status, 401);
+
+    let r = await send("pull_request", { action: "opened", pull_request: pr(), repository: repo });
+    assert.equal(r.status, 200);
+    let res = await r.json();
+    assert.deepEqual(res.matched, [card.ref]);
+    let c = await ok("GET", `/cards/${card.id}`);
+    assert.equal(c.column_name, "Review");
+    assert.equal(c.comments.length, 1);
+    assert.match(c.comments[0].body, /alechash\/relay#7/);
+    assert.equal(c.updated_by.name, "GitHub: relay repo");
+
+    // redelivery of the same GitHub delivery id is ignored
+    const again = await fetch(`${BASE}/hooks/${hook.id}`, {
+      method: "POST",
+      headers: { "X-GitHub-Event": "pull_request", "X-GitHub-Delivery": `gh-${n}`, "X-Hub-Signature-256": "sha256=" + createHmac("sha256", hook.secret).update("{}").digest("hex") },
+      body: "{}",
+    });
+    assert.equal((await again.json()).duplicate, true);
+
+    await send("pull_request", { action: "edited", pull_request: pr(), repository: repo });
+    assert.equal((await ok("GET", `/cards/${card.id}`)).comments.length, 1, "edits don't re-link an already linked PR");
+
+    await send("pull_request", { action: "closed", pull_request: pr({ merged: true, state: "closed" }), repository: repo });
+    c = await ok("GET", `/cards/${card.id}`);
+    assert.equal(c.column_name, "Done");
+    assert.ok(c.completed_at);
+
+    r = await send("pull_request", { action: "opened", pull_request: pr({ head: { ref: "other" }, title: "nothing" }), repository: repo });
+    assert.deepEqual((await r.json()).matched, []);
+    r = await send("pull_request", { action: "opened", pull_request: pr(), repository: { full_name: "someone/else" } });
+    assert.equal(r.status, 202);
   });
 
   test("revoked tokens stop working", async () => {

@@ -6,6 +6,16 @@ import { eventStatement } from "./events";
 import { positionAt, renumber } from "./positions";
 import { cardOut, commentOut, eventOut } from "./serialize";
 import { collectRefs } from "./history";
+import { dispatchCardTransition } from "./webhooks";
+
+/** Fire outbound webhooks for a card change; never lets a webhook problem fail the write. */
+async function afterCardEvent(ctx: Ctx, eventId: string, action: string, before: any | null, after: any) {
+  try {
+    await dispatchCardTransition(ctx, { eventId, action, before, after });
+  } catch (err) {
+    console.error("webhook dispatch failed", err);
+  }
+}
 
 export const PRIORITIES = ["none", "low", "medium", "high", "urgent"] as const;
 
@@ -118,19 +128,21 @@ export async function createCard(ctx: Ctx, input: CreateCardInput) {
     };
     const keys = Object.keys(row);
     try {
+      const ev = eventStatement(ctx, {
+        entityType: "card",
+        entityId: row.id,
+        boardId: row.board_id,
+        cardId: row.id,
+        action: "create",
+        after: cardOut(row),
+        reason: input.reason,
+      });
       await ctx.db.batch([
         ...pre,
         ctx.db.prepare(`INSERT INTO cards (${keys.join(", ")}) VALUES (${keys.map(() => "?").join(", ")})`).bind(...Object.values(row)),
-        eventStatement(ctx, {
-          entityType: "card",
-          entityId: row.id,
-          boardId: row.board_id,
-          cardId: row.id,
-          action: "create",
-          after: cardOut(row),
-          reason: input.reason,
-        }).stmt,
+        ev.stmt,
       ]);
+      await afterCardEvent(ctx, ev.id, "create", null, cardOut(row));
       return getCard(ctx, row.id);
     } catch (err) {
       if (attempt < 2 && String(err).includes("UNIQUE")) continue; // card number race, retry
@@ -202,6 +214,7 @@ export async function writeCard(
   const pre = opts.pre ?? [];
   const res = await ctx.db.batch([...pre, update, ev.stmt]);
   if (res[pre.length].meta.changes === 0) throw conflict("Card was modified concurrently; fetch it again and retry");
+  await afterCardEvent(ctx, ev.id, opts.action, before, after);
   return ev.id;
 }
 

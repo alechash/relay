@@ -14,6 +14,7 @@ import {
 } from "../core/cards";
 import { createColumn, updateColumn } from "../core/columns";
 import { batchCreateCards, batchUpdateCards, MAX_BATCH } from "../core/batch";
+import { createWebhook, listDeliveries, listWebhooks, retryDelivery, updateWebhook } from "../core/webhooks";
 import { listCards, listLabels, searchCards, updateLabel } from "../core/search";
 import { approveChanges, getEvent, listEvents, listReviews, rejectChanges, revertEvent } from "../core/history";
 import { createToken, listTokens, revokeToken, updateToken } from "../core/tokens";
@@ -619,7 +620,86 @@ export const operations: Operation[] = [
     handler: (ctx, i) => revokeToken(ctx, i),
   }),
 
-  // ------------------------------------------------------------------ export
+  // ------------------------------------------------------------------ webhooks
+  op({
+    name: "list_webhooks",
+    method: "GET",
+    path: "/webhooks",
+    tag: "Webhooks",
+    summary: "List webhooks",
+    description: "Inbound (create cards from POSTs), outbound (notify a URL when cards enter columns) and GitHub (link PRs to cards). Secrets are never returned here.",
+    access: "human",
+    input: z.object({ include_revoked: z.boolean().optional() }),
+    handler: (ctx, i) => listWebhooks(ctx, ctx.origin ?? "", i),
+  }),
+  op({
+    name: "create_webhook",
+    method: "POST",
+    path: "/webhooks",
+    tag: "Webhooks",
+    summary: "Create a webhook (secret returned once)",
+    description:
+      "kind=inbound: needs board_id; config {column?, labels?, requires_review?}. Senders POST JSON {title, description?, tags?, source?, priority?, due_on?, delivery_id?} to the returned endpoint, " +
+      "signed with X-Relay-Timestamp + X-Relay-Signature: sha256=HMAC(secret, `${timestamp}.${body}`), or with Authorization: Bearer <secret>. " +
+      "kind=outbound: config {url, columns: [column names or ids]}; board_id optional (limits to one board). Relay POSTs a signed card.entered_column payload whenever a card is created in or moved into one of those columns, retrying with backoff. " +
+      "kind=github: add the returned endpoint + secret as a GitHub webhook (content type application/json; events: pull requests, pull request reviews). PRs whose branch, title or body mention relay-123 are linked to card #123; " +
+      "config {repos?, on_open?, on_ready_for_review?, on_review_approved?, on_changes_requested?, on_merge?, on_close?, comment?} maps PR events to column names.",
+    access: "human",
+    status: 201,
+    input: z.object({
+      kind: z.enum(["inbound", "outbound", "github"]),
+      name: z.string().min(1).max(100),
+      board_id: z.string().nullable().optional(),
+      config: z.record(z.string(), z.unknown()).optional(),
+    }),
+    handler: (ctx, i) => createWebhook(ctx, ctx.origin ?? "", i),
+  }),
+  op({
+    name: "update_webhook",
+    method: "PATCH",
+    path: "/webhooks/{webhook_id}",
+    tag: "Webhooks",
+    summary: "Update, disable/enable, or rotate the secret of a webhook",
+    description: "config is merged into the existing config. rotate_secret=true returns a new secret once; the old one stops working immediately.",
+    access: "human",
+    input: z.object({
+      webhook_id: z.string(),
+      name: z.string().min(1).max(100).optional(),
+      board_id: z.string().nullable().optional(),
+      config: z.record(z.string(), z.unknown()).optional(),
+      active: z.boolean().optional(),
+      rotate_secret: z.boolean().optional(),
+    }),
+    handler: (ctx, i) => updateWebhook(ctx, ctx.origin ?? "", i),
+  }),
+  op({
+    name: "list_webhook_deliveries",
+    method: "GET",
+    path: "/webhooks/deliveries",
+    tag: "Webhooks",
+    summary: "Delivery log (inbound and outbound), newest first",
+    description: "Statuses: outbound pending → delivered, or dead after retries/permanent errors; inbound processed, ignored, rejected (bad signature) or duplicate.",
+    access: "human",
+    input: z.object({
+      webhook_id: z.string().optional(),
+      status: z.string().optional(),
+      before: z.string().optional().describe("ISO timestamp cursor"),
+      limit: z.number().int().min(1).max(200).optional(),
+    }),
+    handler: (ctx, i) => listDeliveries(ctx, i),
+  }),
+  op({
+    name: "retry_webhook_delivery",
+    method: "POST",
+    path: "/webhooks/deliveries/{delivery_id}/retry",
+    tag: "Webhooks",
+    summary: "Retry an outbound delivery now (including dead ones)",
+    access: "human",
+    input: z.object({ delivery_id: z.string() }),
+    handler: (ctx, i) => retryDelivery(ctx, i),
+  }),
+
+  // ------------------------------------------------------------------ export  // ------------------------------------------------------------------ export
   op({
     name: "export_data",
     method: "GET",

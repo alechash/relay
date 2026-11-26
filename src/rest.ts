@@ -115,6 +115,7 @@ export async function handleApi(req: Request, env: Env, exec: ExecutionContext):
       sessionId: req.headers.get("X-Relay-Session")?.slice(0, 200) ?? null,
       waitUntil: (p) => exec.waitUntil(p),
       requestId: req.headers.get("cf-ray") ?? crypto.randomUUID(),
+      origin: new URL(req.url).origin,
     };
     const result = await runOperation(ctx, route.op, input);
     return json(result, route.op.status ?? 200);

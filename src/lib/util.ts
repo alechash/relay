@@ -59,3 +59,9 @@ export function parseJson<T>(s: string | null | undefined, fallback: T): T {
     return fallback;
   }
 }
+
+export async function hmacHex(key: string, data: string): Promise<string> {
+  const k = await crypto.subtle.importKey("raw", new TextEncoder().encode(key), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const sig = await crypto.subtle.sign("HMAC", k, new TextEncoder().encode(data));
+  return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
