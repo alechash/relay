@@ -46,7 +46,7 @@ async function placeCard(ctx: Ctx, columnId: string, excludeId: string | null, i
   return pos;
 }
 
-async function resolveTargetColumn(ctx: Ctx, input: { board_id?: string; column_id?: string; column?: string }) {
+export async function resolveTargetColumn(ctx: Ctx, input: { board_id?: string; column_id?: string; column?: string }) {
   if (input.column_id) return getColumnRow(ctx, input.column_id);
   let boardId = input.board_id;
   if (!boardId) {

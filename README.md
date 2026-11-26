@@ -92,7 +92,7 @@ Optional headers: `X-Relay-Session` groups related changes for review, and `X-Re
 | Boards | `GET/POST /boards` · `GET/PATCH /boards/{id}` |
 | Columns | `POST /boards/{id}/columns` · `PATCH /columns/{id}` |
 | Search | `GET /search` search_cards (compact; text terms, labels with `label_mode` any/all, inclusive `due_after`/`due_before`, `status` = column name) |
-| Cards | `GET/POST /cards` · `GET/PATCH /cards/{id}` · `POST /cards/{id}/move` · `GET /cards/{id}/history` |
+| Cards | `GET/POST /cards` · `GET/PATCH /cards/{id}` · `POST /cards/{id}/move` · `GET /cards/{id}/history` · `POST /cards/batch` batch_create_cards · `POST /cards/batch-update` batch_update_cards (≤ 50 items, validated up front, `atomic` all-or-nothing by default, `idempotency_key`) |
 | Labels | `GET /labels` list_labels (counts + display colours) · `PATCH /labels/{name}` update_label (rename/merge, custom hue) |
 | Comments | `GET/POST /cards/{id}/comments` · `DELETE /comments/{id}` |
 | History | `GET /events` · `GET /events/{id}` · `POST /events/{id}/revert` |

@@ -13,6 +13,7 @@ import {
   updateCard,
 } from "../core/cards";
 import { createColumn, updateColumn } from "../core/columns";
+import { batchCreateCards, batchUpdateCards, MAX_BATCH } from "../core/batch";
 import { listCards, listLabels, searchCards, updateLabel } from "../core/search";
 import { approveChanges, getEvent, listEvents, listReviews, rejectChanges, revertEvent } from "../core/history";
 import { createToken, listTokens, revokeToken, updateToken } from "../core/tokens";
@@ -232,6 +233,91 @@ export const operations: Operation[] = [
       reason,
     }),
     handler: (ctx, i) => createCard(ctx, i),
+  }),
+  op({
+    name: "batch_create_cards",
+    method: "POST",
+    path: "/cards/batch",
+    tag: "Cards",
+    summary: `Create up to ${MAX_BATCH} cards in one call`,
+    description:
+      "Every item is validated (board/column exists, not archived) before anything is written. atomic=true (default): if any item is invalid, nothing is created and every item's result explains why. " +
+      "atomic=false: valid items are created, invalid ones reported. Results are in input order; client_ref is echoed back. Pass idempotency_key to make retries safe (a repeat returns the first response with replayed=true). " +
+      "Items accept column (name) or column_id; status is an alias of column and due_date of due_on.",
+    access: "write",
+    status: 200,
+    input: z.object({
+      board_id: z.string().optional().describe("Default board for items"),
+      column: z.string().optional().describe("Default column name for items"),
+      cards: z
+        .array(
+          z.object({
+            title: z.string().min(1).max(500),
+            description: z.string().max(100000).optional(),
+            board_id: z.string().optional(),
+            column_id: z.string().optional(),
+            column: z.string().optional(),
+            status: z.string().optional().describe("Alias of column"),
+            labels: labels.optional(),
+            priority: priority.optional(),
+            assignee: z.string().max(100).nullable().optional(),
+            due_on: date.nullable().optional(),
+            due_date: date.nullable().optional().describe("Alias of due_on"),
+            position: index.optional(),
+            client_ref: z.string().max(100).optional().describe("Your own id for this item, echoed in its result"),
+          }),
+        )
+        .min(1)
+        .max(MAX_BATCH),
+      atomic: z.boolean().optional().describe("Default true: all-or-nothing validation"),
+      idempotency_key: z.string().min(1).max(200).optional(),
+      reason,
+    }),
+    handler: (ctx, i) =>
+      batchCreateCards(ctx, {
+        ...i,
+        cards: i.cards.map(({ status, due_date, ...c }) => ({ ...c, column: c.column ?? status, due_on: c.due_on !== undefined ? c.due_on : due_date })),
+      }),
+  }),
+  op({
+    name: "batch_update_cards",
+    method: "POST",
+    path: "/cards/batch-update",
+    tag: "Cards",
+    summary: `Update or move up to ${MAX_BATCH} cards in one call`,
+    description:
+      "Each item takes card_id plus any update_card fields, and optionally column/column_id/position to move it. expected_version per item gives optimistic concurrency. " +
+      "Validation (card exists, versions match, targets valid, no duplicate cards) runs for every item first; atomic and idempotency_key behave as in batch_create_cards.",
+    access: "write",
+    input: z.object({
+      updates: z
+        .array(
+          z.object({
+            card_id: cardRef,
+            title: z.string().min(1).max(500).optional(),
+            description: z.string().max(100000).optional(),
+            labels: labels.optional(),
+            add_labels: labels.optional(),
+            remove_labels: labels.optional(),
+            priority: priority.optional(),
+            assignee: z.string().max(100).nullable().optional(),
+            due_on: date.nullable().optional(),
+            archived: z.boolean().optional(),
+            column_id: z.string().optional(),
+            column: z.string().optional().describe("Move to this column (name, on the card's board)"),
+            status: z.string().optional().describe("Alias of column"),
+            position: index.optional(),
+            expected_version: expectedVersion,
+            client_ref: z.string().max(100).optional(),
+          }),
+        )
+        .min(1)
+        .max(MAX_BATCH),
+      atomic: z.boolean().optional().describe("Default true"),
+      idempotency_key: z.string().min(1).max(200).optional(),
+      reason,
+    }),
+    handler: (ctx, i) => batchUpdateCards(ctx, { ...i, updates: i.updates.map(({ status, ...u }) => ({ ...u, column: u.column ?? status })) }),
   }),
   op({
     name: "get_card",

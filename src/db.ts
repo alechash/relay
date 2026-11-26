@@ -136,6 +136,13 @@ const MIGRATIONS: { id: number; name: string; statements: string[] }[] = [
       `CREATE INDEX IF NOT EXISTS idx_cards_number ON cards(number)`,
     ],
   },
+  {
+    id: 4,
+    name: "idempotency_keys",
+    statements: [
+      `CREATE TABLE IF NOT EXISTS idempotency_keys (actor_id TEXT NOT NULL, key TEXT NOT NULL, response TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (actor_id, key))`,
+    ],
+  },
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1].id;

@@ -389,6 +389,65 @@ describe("relay", () => {
     assert.equal((await ok("GET", "/labels")).labels.find((l) => l.name === "home").custom, false);
   });
 
+  test("batch_create_cards: all-or-nothing by default, partial on request, idempotent", async () => {
+    const b = await ok("POST", "/boards", { body: { name: "Batch", columns: ["Todo", "Done"] } });
+    const bad = await ok("POST", "/cards/batch", {
+      body: { board_id: b.id, cards: [{ title: "one" }, { title: "two", status: "Nope" }, { title: "three", client_ref: "c3" }] },
+    });
+    assert.equal(bad.applied, false);
+    assert.equal(bad.failed, 3);
+    assert.equal(bad.results[1].error.code, "not_found");
+    assert.equal(bad.results[2].error.code, "not_applied");
+    assert.equal(bad.results[2].client_ref, "c3");
+    assert.equal((await ok("GET", `/search?board_id=${b.id}`)).total, 0);
+
+    const partial = await ok("POST", "/cards/batch", {
+      body: { board_id: b.id, atomic: false, cards: [{ title: "one", due_date: "2026-05-01" }, { title: "two", status: "Nope" }, { title: "three", status: "done" }] },
+    });
+    assert.equal(partial.succeeded, 2);
+    assert.equal(partial.results[0].card.due_on, "2026-05-01");
+    assert.equal(partial.results[1].ok, false);
+    assert.equal(partial.results[2].card.status, "Done");
+
+    const first = await ok("POST", "/cards/batch", { body: { board_id: b.id, idempotency_key: "k1", cards: [{ title: "once" }] } });
+    const again = await ok("POST", "/cards/batch", { body: { board_id: b.id, idempotency_key: "k1", cards: [{ title: "once" }] } });
+    assert.equal(again.replayed, true);
+    assert.equal(again.results[0].card.id, first.results[0].card.id);
+    assert.equal((await ok("GET", `/search?board_id=${b.id}&q=once`)).total, 1);
+    assert.equal((await call("POST", "/cards/batch", { body: { board_id: b.id, cards: Array.from({ length: 51 }, (_, i) => ({ title: "x" + i })) } })).status, 422);
+  });
+
+  test("batch_update_cards: validates versions first, moves and edits", async () => {
+    const found = (await ok("GET", "/search?q=one&detail=full")).cards.find((c) => c.title === "one");
+    const three = (await ok("GET", "/search?q=three&detail=full")).cards.find((c) => c.title === "three");
+    const rejected = await ok("POST", "/cards/batch-update", {
+      body: { updates: [{ card_id: found.ref, title: "one!" }, { card_id: three.ref, title: "x", expected_version: 999 }] },
+    });
+    assert.equal(rejected.applied, false);
+    assert.equal(rejected.results[1].error.code, "conflict");
+    assert.equal((await ok("GET", `/cards/${found.id}`)).title, "one");
+
+    const dup = await ok("POST", "/cards/batch-update", { body: { updates: [{ card_id: found.id, title: "a" }, { card_id: found.ref, title: "b" }] } });
+    assert.equal(dup.applied, false);
+
+    const res = await ok("POST", "/cards/batch-update", {
+      body: {
+        reason: "tidy",
+        updates: [
+          { card_id: found.ref, title: "one!", add_labels: ["x"], status: "Done", expected_version: found.version },
+          { card_id: three.ref, column: "Todo", position: 0 },
+        ],
+      },
+    });
+    assert.equal(res.succeeded, 2);
+    const after = await ok("GET", `/cards/${found.id}`);
+    assert.equal(after.title, "one!");
+    assert.equal(after.column_name, "Done");
+    assert.ok(after.completed_at);
+    assert.deepEqual(after.labels, ["x"]);
+    assert.equal((await ok("GET", `/cards/${three.id}`)).column_name, "Todo");
+  });
+
   test("revoked tokens stop working", async () => {
     await ok("DELETE", `/tokens/${agentId}`);
     assert.equal((await call("GET", "/me", { token: agentToken })).status, 401);
