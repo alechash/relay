@@ -328,6 +328,67 @@ describe("relay", () => {
     assert.ok(dump.events.length > 10);
   });
 
+  test("search_cards: terms, label modes, inclusive date range, status, compact output", async () => {
+    const b = await ok("POST", "/boards", { body: { name: "Search", columns: ["Inbox", "Doing", "Done"] } });
+    const mk = (title, extra = {}) => ok("POST", "/cards", { body: { board_id: b.id, title, ...extra } });
+    const c1 = await mk("Fix login bug", { labels: ["work", "urgent"], due_on: "2026-03-01", description: "Safari only" });
+    await mk("Buy groceries", { labels: ["home"], due_on: "2026-03-05" });
+    await mk("Write login docs", { labels: ["work"], due_on: "2026-03-10", column: "Doing" });
+
+    let r = await ok("GET", `/search?board_id=${b.id}&q=login%20safari`);
+    assert.deepEqual(r.cards.map((c) => c.title), ["Fix login bug"]);
+    assert.equal(r.total, 1);
+    assert.equal(r.cards[0].status, "Inbox");
+    assert.ok(!("description" in r.cards[0]), "summary should be compact");
+    assert.match(r.cards[0].labels[0].color, /^#[0-9a-f]{6}$/);
+
+    r = await ok("GET", `/search?board_id=${b.id}&labels=work,urgent`);
+    assert.equal(r.total, 1);
+    r = await ok("GET", `/search?board_id=${b.id}&labels=work,home&label_mode=any`);
+    assert.equal(r.total, 3);
+    r = await ok("GET", `/search?board_id=${b.id}&tags=WORK`);
+    assert.equal(r.total, 2);
+
+    r = await ok("GET", `/search?board_id=${b.id}&due_after=2026-03-05&due_before=2026-03-10&sort=due`);
+    assert.deepEqual(r.cards.map((c) => c.title), ["Buy groceries", "Write login docs"]);
+    assert.equal((await call("GET", `/search?due_after=2026-04-01&due_before=2026-03-01`)).status, 400);
+    assert.equal((await call("GET", `/search?due_after=March`)).status, 422);
+
+    r = await ok("GET", `/search?board_id=${b.id}&status=doing`);
+    assert.deepEqual(r.cards.map((c) => c.title), ["Write login docs"]);
+    r = await ok("GET", `/search?q=${encodeURIComponent(c1.ref)}`);
+    assert.ok(r.cards.some((c) => c.id === c1.id));
+
+    r = await ok("GET", `/search?board_id=${b.id}&limit=2&sort=number`);
+    assert.equal(r.cards.length, 2);
+    assert.equal(r.total, 3);
+    assert.equal(r.next_offset, 2);
+    r = await ok("GET", `/search?board_id=${b.id}&detail=full&q=groceries`);
+    assert.equal(r.cards[0].description, "");
+  });
+
+  test("labels: list with colours, rename/merge across cards, custom hue", async () => {
+    const before = (await ok("GET", "/labels")).labels;
+    const work = before.find((l) => l.name.toLowerCase() === "work");
+    assert.ok(work.count >= 2);
+    assert.equal(typeof work.hue, "number");
+    const again = (await ok("GET", "/labels")).labels.find((l) => l.name.toLowerCase() === "work");
+    assert.equal(again.color, work.color, "colours are deterministic");
+
+    const res = await ok("PATCH", "/labels/urgent", { body: { rename_to: "Work", reason: "merge" } });
+    assert.equal(res.cards_updated, 1);
+    const card = (await ok("GET", "/search?q=login%20safari&detail=full")).cards[0];
+    assert.deepEqual(card.labels, ["work"]);
+    const h = await ok("GET", `/cards/${card.id}/history`);
+    assert.equal(h.events.at(-1).reason, "merge");
+
+    const colored = await ok("PATCH", "/labels/home", { body: { hue: 120 } });
+    assert.equal(colored.hue, 120);
+    assert.equal((await ok("GET", "/labels")).labels.find((l) => l.name === "home").custom, true);
+    await ok("PATCH", "/labels/home", { body: { hue: null } });
+    assert.equal((await ok("GET", "/labels")).labels.find((l) => l.name === "home").custom, false);
+  });
+
   test("revoked tokens stop working", async () => {
     await ok("DELETE", `/tokens/${agentId}`);
     assert.equal((await call("GET", "/me", { token: agentToken })).status, 401);

@@ -442,7 +442,19 @@ async function newBoard() {
 }
 
 async function loadBoard(id) {
-  state.board = await api("GET", `/boards/${id}${qs({ include_archived: state.showArchived ? "true" : "" })}`);
+  const [board, labels] = await Promise.all([
+    api("GET", `/boards/${id}${qs({ include_archived: state.showArchived ? "true" : "" })}`),
+    api("GET", "/labels").catch(() => ({ labels: [] })),
+  ]);
+  state.board = board;
+  state.labelColors = Object.fromEntries(labels.labels.map((l) => [l.name.toLowerCase(), l]));
+}
+
+// Label chip coloured with the API's display colours (light + dark pairs).
+function labelChip(name) {
+  const c = state.labelColors?.[name.toLowerCase()];
+  const style = c ? `--lc:${c.color};--lt:${c.text_color};--lcd:${c.dark_color};--ltd:${c.dark_text_color}` : null;
+  return h("span", { class: "label", style }, name);
 }
 
 async function showBoard(id, cardRef) {
@@ -676,7 +688,7 @@ function renderCardTile(card) {
   const meta = [
     card.priority !== "none" ? h("span", { class: `prio prio-${card.priority}` }, card.priority) : null,
     card.due_on ? h("span", { class: "due" + (isOverdue(card) ? " overdue" : "") }, fmtDue(card.due_on)) : null,
-    ...card.labels.map((l) => h("span", { class: "label" }, l)),
+    ...card.labels.map(labelChip),
     card.assignee ? h("span", {}, "@" + card.assignee) : null,
     card.comment_count ? h("span", { style: "display:inline-flex;gap:3px;align-items:center", title: `${card.comment_count} comments` }, icon("comment"), card.comment_count) : null,
     pending

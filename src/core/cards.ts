@@ -300,67 +300,6 @@ export async function getCard(ctx: Ctx, ref: string, opts: { include_history?: b
   };
 }
 
-export interface ListCardsInput {
-  q?: string;
-  board_id?: string;
-  column_id?: string;
-  label?: string;
-  assignee?: string;
-  priority?: string;
-  archived?: "false" | "true" | "all";
-  completed?: boolean;
-  needs_review?: boolean;
-  due_before?: string;
-  updated_since?: string;
-  sort?: "updated" | "created" | "due" | "position" | "number";
-  limit?: number;
-  offset?: number;
-}
-
-export async function listCards(ctx: Ctx, input: ListCardsInput) {
-  const where: string[] = [];
-  const args: unknown[] = [];
-  if (input.q) {
-    where.push(`(c.title LIKE ? ESCAPE '\\' OR c.description LIKE ? ESCAPE '\\')`);
-    const like = `%${input.q.replace(/[\\%_]/g, (m) => "\\" + m)}%`;
-    args.push(like, like);
-  }
-  if (input.board_id) where.push(`c.board_id = ?`), args.push(input.board_id);
-  if (input.column_id) where.push(`c.column_id = ?`), args.push(input.column_id);
-  if (input.label) where.push(`EXISTS (SELECT 1 FROM json_each(c.labels) j WHERE lower(j.value) = lower(?))`), args.push(input.label);
-  if (input.assignee) where.push(`lower(c.assignee) = lower(?)`), args.push(input.assignee);
-  if (input.priority) where.push(`c.priority = ?`), args.push(input.priority);
-  const archived = input.archived ?? "false";
-  if (archived === "false") where.push(`c.archived_at IS NULL`);
-  if (archived === "true") where.push(`c.archived_at IS NOT NULL`);
-  if (input.completed === true) where.push(`c.completed_at IS NOT NULL`);
-  if (input.completed === false) where.push(`c.completed_at IS NULL`);
-  if (input.needs_review === true) where.push(`EXISTS (SELECT 1 FROM events e WHERE e.card_id = c.id AND e.review_status = 'pending')`);
-  if (input.due_before) where.push(`c.due_on IS NOT NULL AND c.due_on <= ?`), args.push(input.due_before);
-  if (input.updated_since) where.push(`c.updated_at >= ?`), args.push(input.updated_since);
-  const order = {
-    updated: "c.updated_at DESC",
-    created: "c.created_at DESC",
-    due: "c.due_on IS NULL, c.due_on ASC",
-    position: "c.board_id, col.position, c.position",
-    number: "c.number ASC",
-  }[input.sort ?? "updated"];
-  const limit = Math.min(Math.max(input.limit ?? 50, 1), 200);
-  const offset = Math.max(input.offset ?? 0, 0);
-  const sql = `SELECT c.*, col.name AS column_name,
-      (SELECT COUNT(*) FROM events e WHERE e.card_id = c.id AND e.review_status = 'pending') AS pending_reviews
-    FROM cards c JOIN columns col ON col.id = c.column_id
-    ${where.length ? "WHERE " + where.join(" AND ") : ""}
-    ORDER BY ${order} LIMIT ? OFFSET ?`;
-  const { results } = await ctx.db.prepare(sql).bind(...args, limit + 1, offset).all<any>();
-  const has_more = results.length > limit;
-  return {
-    cards: results.slice(0, limit).map((r) => ({ ...cardOut(r), column_name: r.column_name as string })),
-    has_more,
-    next_offset: has_more ? offset + limit : null,
-  };
-}
-
 export async function cardHistory(ctx: Ctx, ref: string) {
   const row = await getCardRow(ctx, ref);
   const { results } = await ctx.db.prepare(`SELECT * FROM events WHERE card_id = ? ORDER BY seq`).bind(row.id).all();

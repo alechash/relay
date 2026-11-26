@@ -91,7 +91,9 @@ Optional headers: `X-Relay-Session` groups related changes for review, and `X-Re
 | Meta | `GET /me` get_me · `GET /export` export_data |
 | Boards | `GET/POST /boards` · `GET/PATCH /boards/{id}` |
 | Columns | `POST /boards/{id}/columns` · `PATCH /columns/{id}` |
+| Search | `GET /search` search_cards (compact; text terms, labels with `label_mode` any/all, inclusive `due_after`/`due_before`, `status` = column name) |
 | Cards | `GET/POST /cards` · `GET/PATCH /cards/{id}` · `POST /cards/{id}/move` · `GET /cards/{id}/history` |
+| Labels | `GET /labels` list_labels (counts + display colours) · `PATCH /labels/{name}` update_label (rename/merge, custom hue) |
 | Comments | `GET/POST /cards/{id}/comments` · `DELETE /comments/{id}` |
 | History | `GET /events` · `GET /events/{id}` · `POST /events/{id}/revert` |
 | Sign-off | `GET /reviews` · `POST /reviews/approve` · `POST /reviews/reject` |

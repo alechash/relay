@@ -92,7 +92,7 @@ export function buildOpenApi(origin: string) {
         },
       },
     },
-    tags: ["Meta", "Boards", "Columns", "Cards", "Comments", "History", "Sign-off", "Tokens"].map((name) => ({ name })),
+    tags: ["Meta", "Boards", "Columns", "Cards", "Labels", "Comments", "History", "Sign-off", "Tokens"].map((name) => ({ name })),
     paths,
   };
 }

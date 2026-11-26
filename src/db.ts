@@ -128,6 +128,14 @@ const MIGRATIONS: { id: number; name: string; statements: string[] }[] = [
       `CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL)`,
     ],
   },
+  {
+    id: 3,
+    name: "search_indexes",
+    statements: [
+      `CREATE INDEX IF NOT EXISTS idx_cards_due ON cards(due_on) WHERE due_on IS NOT NULL`,
+      `CREATE INDEX IF NOT EXISTS idx_cards_number ON cards(number)`,
+    ],
+  },
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1].id;

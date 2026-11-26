@@ -250,8 +250,11 @@ label.field { display: grid; gap: var(--space-1); font-size: var(--text-sm); col
 
 .label {
   display: inline-flex; align-items: center; height: 18px; padding: 0 6px;
-  border-radius: var(--radius-sm); background: var(--color-lane); color: var(--color-ink-2);
+  border-radius: var(--radius-sm); background: var(--lc, var(--color-lane)); color: var(--lt, var(--color-ink-2));
   font-size: var(--text-xs); font-weight: 500; white-space: nowrap;
+}
+@media (prefers-color-scheme: dark) {
+  .label { background: var(--lcd, var(--color-lane)); color: var(--ltd, var(--color-ink-2)); }
 }
 .prio { display: inline-flex; align-items: center; gap: 3px; font-weight: 600; }
 .prio::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }

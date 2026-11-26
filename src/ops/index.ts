@@ -7,13 +7,13 @@ import {
   createCard,
   deleteComment,
   getCard,
-  listCards,
   listComments,
   moveCard,
   PRIORITIES,
   updateCard,
 } from "../core/cards";
 import { createColumn, updateColumn } from "../core/columns";
+import { listCards, listLabels, searchCards, updateLabel } from "../core/search";
 import { approveChanges, getEvent, listEvents, listReviews, rejectChanges, revertEvent } from "../core/history";
 import { createToken, listTokens, revokeToken, updateToken } from "../core/tokens";
 import { SCHEMA_VERSION } from "../db";
@@ -25,6 +25,26 @@ const date = z
   .regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD")
   .describe("Date as YYYY-MM-DD");
 const labels = z.array(z.string().min(1).max(64)).max(50);
+const cardFilters = z.object({
+  q: z.string().max(500).optional().describe("Text search: every term must appear in title or description"),
+  board_id: z.string().optional(),
+  column_id: z.string().optional(),
+  status: z.string().max(100).optional().describe("Column name, case-insensitive (e.g. 'Doing')"),
+  label: z.string().optional().describe("Single label (kept for compatibility; same as labels=[label])"),
+  labels: z.array(z.string()).max(20).optional(),
+  label_mode: z.enum(["all", "any"]).optional().describe("How multiple labels combine. Default all"),
+  assignee: z.string().optional(),
+  priority: z.enum(PRIORITIES).optional(),
+  archived: z.enum(["false", "true", "all"]).optional().describe("Default false"),
+  completed: z.boolean().optional(),
+  needs_review: z.boolean().optional().describe("true: only cards with changes awaiting sign-off; false: only cards without"),
+  due_after: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD").optional().describe("Inclusive"),
+  due_before: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD").optional().describe("Inclusive"),
+  updated_since: z.string().optional().describe("ISO timestamp"),
+  sort: z.enum(["updated", "created", "due", "position", "number"]).optional(),
+  limit: z.number().int().min(1).max(200).optional(),
+  offset: z.number().int().min(0).optional(),
+});
 const index = z.number().int().min(0).describe("0-based index within the parent (column for cards, board for columns). Omit to append at the end.");
 
 export const operations: Operation[] = [
@@ -162,25 +182,31 @@ export const operations: Operation[] = [
     method: "GET",
     path: "/cards",
     tag: "Cards",
-    summary: "Search and filter cards",
+    summary: "List cards (full objects) with filters",
+    description: "Same filters as search_cards, but returns full card objects. Prefer search_cards for finding cards.",
     access: "read",
-    input: z.object({
-      q: z.string().optional().describe("Text search over title and description"),
-      board_id: z.string().optional(),
-      column_id: z.string().optional(),
-      label: z.string().optional(),
-      assignee: z.string().optional(),
-      priority: priority.optional(),
-      archived: z.enum(["false", "true", "all"]).optional().describe("Default false"),
-      completed: z.boolean().optional(),
-      needs_review: z.boolean().optional().describe("Only cards with changes awaiting sign-off"),
-      due_before: date.optional(),
-      updated_since: z.string().optional().describe("ISO timestamp"),
-      sort: z.enum(["updated", "created", "due", "position", "number"]).optional(),
-      limit: z.number().int().min(1).max(200).optional(),
-      offset: z.number().int().min(0).optional(),
-    }),
+    input: cardFilters,
     handler: (ctx, i) => listCards(ctx, i),
+  }),
+  op({
+    name: "search_cards",
+    method: "GET",
+    path: "/search",
+    tag: "Cards",
+    summary: "Search cards across all boards",
+    description:
+      "Compact results by default (ref, title, board, status/column, labels with colours, due date, updated_at); pass detail=full for full card objects. " +
+      "q: every whitespace-separated term must appear in the title or description (case-insensitive); '#42' also matches card 42. " +
+      "labels: label_mode 'all' (default) requires every label, 'any' requires at least one. " +
+      "due_after/due_before are inclusive dates. status is a column name. All filters combine with AND. Paginate with offset; `total` is the full match count.",
+    access: "read",
+    input: cardFilters.extend({
+      query: z.string().max(500).optional().describe("Alias of q"),
+      tags: z.array(z.string()).max(20).optional().describe("Alias of labels"),
+      detail: z.enum(["summary", "full"]).optional().describe("Default summary"),
+    }),
+    handler: (ctx, i) =>
+      searchCards(ctx, { ...i, q: i.q ?? i.query, labels: [...(i.labels ?? []), ...(i.tags ?? [])], limit: i.limit ?? 25 }),
   }),
   op({
     name: "create_card",
@@ -270,6 +296,39 @@ export const operations: Operation[] = [
     access: "read",
     input: z.object({ card_id: cardRef }),
     handler: (ctx, i) => cardHistory(ctx, i.card_id),
+  }),
+
+  // ------------------------------------------------------------------ labels
+  op({
+    name: "list_labels",
+    method: "GET",
+    path: "/labels",
+    tag: "Labels",
+    summary: "List labels in use, with counts and display colours",
+    description:
+      "Labels are free-form strings on cards, matched case-insensitively. Each comes with a deterministic colour (or a custom hue set via update_label): " +
+      "color/text_color for light themes, dark_color/dark_text_color for dark themes.",
+    access: "read",
+    input: z.object({ board_id: z.string().optional(), include_archived: z.boolean().optional() }),
+    handler: (ctx, i) => listLabels(ctx, i),
+  }),
+  op({
+    name: "update_label",
+    method: "PATCH",
+    path: "/labels/{name}",
+    tag: "Labels",
+    summary: "Rename/merge a label everywhere, or set its colour",
+    description:
+      "rename_to renames the label on every card that has it (merging into an existing label if one matches); each card change is recorded in history. hue (0–359) sets a custom colour; null resets to the default.",
+    access: "write",
+    input: z.object({
+      name: z.string().min(1).max(64),
+      rename_to: z.string().min(1).max(64).optional(),
+      hue: z.number().int().min(0).max(359).nullable().optional(),
+      board_id: z.string().optional().describe("Limit a rename to one board"),
+      reason,
+    }),
+    handler: (ctx, i) => updateLabel(ctx, i),
   }),
 
   // ------------------------------------------------------------------ comments
